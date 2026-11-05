@@ -92,6 +92,7 @@ The server only listens on `localhost` and can't be reached from other devices.
 ```bash
 npm run dev      # server on :3001 + Vite on :5173 with hot reload
 npm run build    # type check + production build into dist/
+npm test         # unit tests (node:test)
 ```
 
 Structure: `src/` (React frontend), `server/` (login, coach proxy, data store, puzzle proxy), `public/engine/` (Stockfish). Texts live inline as `L('Deutsch', 'English')` (see `src/i18n.ts`).
