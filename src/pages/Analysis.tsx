@@ -352,7 +352,7 @@ export function Analysis({ gameId, loggedIn, settings }: PageProps & { gameId?: 
             <b>{side === 'w' ? whiteName : blackName}</b>
             {game && !isYou && <span className="rating">({game.botRating})</span>}
           </div>
-          <div className="bar-sub">{analysis && <span className="acc">{analysis.accuracy[side]} % Genauigkeit</span>}</div>
+          <div className="bar-sub">{analysis && <span className="acc">{analysis.accuracy[side]} % {L('Genauigkeit', 'accuracy')}</span>}</div>
         </div>
       </div>
     );
