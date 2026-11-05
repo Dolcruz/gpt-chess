@@ -54,8 +54,14 @@ export function pvToSan(fen: string, pv: string[], max = 6): string[] {
  */
 export function reviewMove(fenBefore: string, uci: string, san: string, before: EngineLine[], after: EngineLine[], ply: number): MoveReview {
   const best = before[0];
-  // Nach dem Zug ist der Gegner am Zug -> Vorzeichen drehen
-  const afterScore = after.length ? -after[0].score : best.score;
+  const fenAfter = (() => {
+    const c = new Chess(fenBefore);
+    c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    return c.fen();
+  })();
+  // Nach dem Zug ist der Gegner am Zug -> Vorzeichen drehen.
+  // Keine Engine-Zeilen danach: Matt (Bewertung bleibt) oder Patt (Remis = 0, z. B. ein Patzer aus Gewinnstellung)
+  const afterScore = after.length ? -after[0].score : new Chess(fenAfter).isCheckmate() ? best.score : 0;
   const afterMate = after.length && after[0].mate !== null ? -after[0].mate : null;
   const winLoss = Math.max(0, winPercent(best.score) - winPercent(afterScore));
   const isBest = best.pv[0] === uci;
@@ -69,12 +75,6 @@ export function reviewMove(fenBefore: string, uci: string, san: string, before: 
   else if (winLoss < 10) classification = 'inaccuracy';
   else if (winLoss < 20) classification = 'mistake';
   else classification = 'blunder';
-
-  const fenAfter = (() => {
-    const c = new Chess(fenBefore);
-    c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-    return c.fen();
-  })();
 
   return {
     san,
