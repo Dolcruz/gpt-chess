@@ -135,6 +135,8 @@ export function winPercent(cp: number) {
 }
 
 export function formatScore(score: number, mate: number | null) {
+  // Matt auf dem Brett (keine Züge mehr)
+  if (mate === 0) return '#';
   if (mate !== null) return `${mate > 0 ? '' : '-'}M${Math.abs(mate)}`;
   const v = score / 100;
   return `${v > 0 ? '+' : ''}${v.toFixed(1)}`;
