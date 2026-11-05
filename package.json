@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node dev.mjs",
     "build": "tsc --noEmit && vite build",
+    "test": "node --import tsx --test test/*.test.ts",
     "start": "node launch.mjs",
     "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-shortcut.ps1"
   },

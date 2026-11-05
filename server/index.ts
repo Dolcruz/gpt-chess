@@ -5,6 +5,7 @@ import { Chess } from 'chess.js';
 import { authHeaders, importCodex, logout, refresh, startLogin, status } from './auth.ts';
 import { isCollection, list, remove, upsert } from './store.ts';
 import { langMiddleware, T } from './i18n.ts';
+import { localOnly } from './localOnly.ts';
 
 const PORT = Number(process.env.SERVER_PORT ?? 3001);
 const APP_URL = process.env.APP_URL ?? 'http://localhost:5173';
@@ -19,6 +20,8 @@ app.use((req, res, next) => {
   if (host.startsWith('gpt-schach.localhost')) return res.redirect(301, `http://${host.replace('gpt-schach', 'gpt-chess')}${req.originalUrl}`);
   next();
 });
+// Nur Anfragen an lokale Adressen (gegen DNS-Rebinding) und schreibende Anfragen nur von der App (gegen CSRF)
+app.use(localOnly([new URL(APP_URL).hostname]));
 app.use(express.json({ limit: '5mb' }));
 app.use(langMiddleware);
 
