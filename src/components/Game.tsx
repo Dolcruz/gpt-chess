@@ -292,6 +292,36 @@ export function Game({ setup, loggedIn, settings, onExit, onRematch, onNewGame }
     [tc],
   );
 
+  /** Ist die Zeit dieser Seite schon abgelaufen (auch wenn der 100-ms-Tick es noch nicht bemerkt hat)? */
+  const outOfTime = useCallback(
+    (side: 'w' | 'b') => {
+      const k = clock.current;
+      return !!tc && k.running && chess.current.turn() === side && k[side] - (performance.now() - k.turnStart) <= 0;
+    },
+    [tc],
+  );
+
+  /** Zeit abgelaufen: Partie beenden */
+  const flag = useCallback(
+    (loser: 'w' | 'b') => {
+      const k = clock.current;
+      k[loser] = 0;
+      k.running = false;
+      epoch.current++;
+      setThinking(false);
+      setClockView({ w: k.w, b: k.b });
+      // Kann der andere überhaupt noch mattsetzen? Sonst Remis
+      const pieces = chess.current.board().flat().filter((x) => x && x.color !== loser && x.type !== 'k');
+      const canMate = pieces.some((x) => x!.type === 'p' || x!.type === 'q' || x!.type === 'r') || pieces.length >= 2;
+      if (!canMate) setOver({ title: L('Remis', 'Draw'), reason: L('Zeit abgelaufen, aber zu wenig Material zum Mattsetzen', 'Time ran out, but not enough material to mate'), result: 'draw' });
+      else if (loser === playerColor) setOver({ title: L(`${bot.name} gewinnt`, `${bot.name} wins`), reason: L('durch Zeitüberschreitung', 'on time'), result: 'loss' });
+      else setOver({ title: L('Du hast gewonnen!', 'You won!'), reason: L('durch Zeitüberschreitung', 'on time'), result: 'win' });
+      setShowModal(true);
+      playSound('end');
+    },
+    [bot.name, playerColor],
+  );
+
   const checkOver = useCallback(() => {
     const c = chess.current;
     if (!c.isGameOver()) return false;
@@ -338,6 +368,7 @@ export function Game({ setup, loggedIn, settings, onExit, onRematch, onNewGame }
       sleep(budget),
     ]);
     if (e !== epoch.current || !uci || overRef.current || c.fen() !== fenBefore) return;
+    if (outOfTime(c.turn())) return flag(c.turn());
     setThinking(false);
     let mv: Move;
     try {
@@ -362,7 +393,7 @@ export function Game({ setup, loggedIn, settings, onExit, onRematch, onNewGame }
       if (e !== epoch.current) return;
       askCoach(botMovePrompt(ctx, mv.san, lines[0] ? pvToSan(c.fen(), lines[0].pv, 4) : []), { drawArrows: false });
     }
-  }, [addMsg, analyze, askCoach, bot, checkOver, coach, context, playerColor, punch, sync, tc]);
+  }, [addMsg, analyze, askCoach, bot, checkOver, coach, context, flag, outOfTime, playerColor, punch, sync, tc]);
 
   // ---------- Spieler ----------
 
@@ -371,6 +402,11 @@ export function Game({ setup, loggedIn, settings, onExit, onRematch, onNewGame }
       const c = chess.current;
       const e = epoch.current;
       const fenBefore = c.fen();
+      if (outOfTime(c.turn())) {
+        flag(c.turn());
+        sync();
+        return;
+      }
       let mv: Move;
       try {
         mv = c.move({ from, to, promotion: promo ?? 'q' });
@@ -422,7 +458,7 @@ export function Game({ setup, loggedIn, settings, onExit, onRematch, onNewGame }
       }
       if (!bad) botTurn();
     },
-    [addMsg, analyze, askCoach, bot, botTurn, checkOver, coach, context, punch, sync, vv.close],
+    [addMsg, analyze, askCoach, bot, botTurn, checkOver, coach, context, flag, outOfTime, punch, sync, vv.close],
   );
 
   const onBoardMove = useCallback(
@@ -589,24 +625,10 @@ export function Game({ setup, loggedIn, settings, onExit, onRematch, onNewGame }
       const side = chess.current.turn();
       const left = k[side] - (performance.now() - k.turnStart);
       setClockView({ ...{ w: k.w, b: k.b }, [side]: Math.max(0, left) });
-      if (left > 0) return;
-      // Zeit abgelaufen
-      k[side] = 0;
-      k.running = false;
-      epoch.current++;
-      setThinking(false);
-      const loser = side;
-      // Kann der andere überhaupt noch mattsetzen? Sonst Remis
-      const pieces = chess.current.board().flat().filter((x) => x && x.color !== loser && x.type !== 'k');
-      const canMate = pieces.some((x) => x!.type === 'p' || x!.type === 'q' || x!.type === 'r') || pieces.length >= 2;
-      if (!canMate) setOver({ title: L('Remis', 'Draw'), reason: L('Zeit abgelaufen, aber zu wenig Material zum Mattsetzen', 'Time ran out, but not enough material to mate'), result: 'draw' });
-      else if (loser === playerColor) setOver({ title: L(`${bot.name} gewinnt`, `${bot.name} wins`), reason: L('durch Zeitüberschreitung', 'on time'), result: 'loss' });
-      else setOver({ title: L('Du hast gewonnen!', 'You won!'), reason: L('durch Zeitüberschreitung', 'on time'), result: 'win' });
-      setShowModal(true);
-      playSound('end');
+      if (left <= 0) flag(side);
     }, 100);
     return () => window.clearInterval(id);
-  }, [tc, over, playerColor, bot.name]);
+  }, [tc, over, flag]);
 
   // ---------- Start ----------
 
