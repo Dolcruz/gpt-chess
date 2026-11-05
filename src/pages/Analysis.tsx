@@ -143,6 +143,9 @@ export function Analysis({ gameId, loggedIn, settings }: PageProps & { gameId?: 
     if (c.isGameOver()) {
       e.analyzer.cancel();
       setLive({ fen, lines: [] });
+      // Matt/Patt: Die Engine liefert nichts, die Bewertung steht aber fest (sonst bleibt der letzte Zug ewig „wird bewertet“)
+      evals.current.set(fen, c.isCheckmate() ? { cp: c.turn() === 'w' ? -10000 : 10000, mate: 0, best: '', depth: 99 } : { cp: 0, mate: null, best: '', depth: 99 });
+      bump((x) => x + 1);
       return;
     }
     e.analyzer.analyze(fen, {
