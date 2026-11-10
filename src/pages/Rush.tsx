@@ -7,6 +7,7 @@ import { store, uid, type RushRecord } from '../lib/data';
 import { usePuzzle, type PuzzleData, type PuzzleOutcome } from '../lib/usePuzzle';
 import { navigate } from '../router';
 import { playSound } from '../sound';
+import { RushQueue } from '../lib/rushQueue';
 
 const MAX_ERRORS = 3;
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -16,8 +17,8 @@ function tierFor(solved: number) {
   return solved < 6 ? 'easiest' : solved < 12 ? 'easier' : solved < 18 ? 'normal' : solved < 25 ? 'harder' : 'hardest';
 }
 
-async function fetchBatch(difficulty: string): Promise<PuzzleData[]> {
-  const r = await fetch(`/api/puzzle/pool?difficulty=${difficulty}&n=3`);
+async function fetchBatch(difficulty: string, signal: AbortSignal): Promise<PuzzleData[]> {
+  const r = await fetch(`/api/puzzle/pool?difficulty=${difficulty}&n=3`, { signal });
   const j = await r.json();
   if (!r.ok) throw new Error(j.error ?? L('Aufgaben konnten nicht geladen werden', 'Could not load puzzles'));
   return j;
@@ -30,8 +31,9 @@ export function Rush({ seconds }: { seconds: number }) {
   const [left, setLeft] = useState(seconds * 1000);
   const [history, setHistory] = useState<RushRecord[]>([]);
   const [error, setError] = useState('');
-  const queue = useRef<PuzzleData[]>([]);
-  const loading = useRef(false);
+  const [loading, setLoading] = useState(false);
+  const queue = useRef(new RushQueue(fetchBatch));
+  const session = useRef(0);
   const endAt = useRef(0);
   const savedRef = useRef(false);
 
@@ -43,46 +45,55 @@ export function Rush({ seconds }: { seconds: number }) {
     store.list('rush').then(setHistory).catch(() => {});
   }, []);
 
-  /** Vorrat für die aktuelle Stufe auffüllen */
-  const topUp = useCallback(async (solved: number) => {
-    if (loading.current || queue.current.length >= 3) return;
-    loading.current = true;
+  /** Erste Aufgaben vorladen; nach einem Netzwerkfehler erneut aufrufbar. */
+  const prepare = useCallback(async () => {
+    const id = session.current;
+    setLoading(true);
+    setError('');
     try {
-      const batch = await fetchBatch(tierFor(solved));
-      const seen = new Set([...queue.current.map((q) => q.id)]);
-      queue.current.push(...batch.filter((b) => !seen.has(b.id)));
+      await queue.current.refill(tierFor(0));
+      if (id !== session.current) return;
+      if (!queue.current.size) throw new Error(L('Keine Aufgaben erhalten', 'No puzzles received'));
+      setPhase('ready');
     } catch (e: any) {
-      setError(e.message);
+      if (id === session.current) setError(e.message);
     } finally {
-      loading.current = false;
+      if (id === session.current) setLoading(false);
     }
   }, []);
 
-  // Erste Aufgaben vorladen
   useEffect(() => {
-    (async () => {
-      await topUp(0);
-      if (queue.current.length) setPhase('ready');
-    })();
-  }, [topUp]);
+    prepare();
+    return () => {
+      session.current++;
+      queue.current.reset();
+    };
+  }, [prepare]);
 
   const next = useCallback(
-    (solved: number) => {
-      const p = queue.current.shift() ?? null;
-      setPuzzle(p);
-      topUp(solved);
-      if (!p) {
-        // Vorrat leer: kurz warten und erneut versuchen
-        setTimeout(() => {
-          const q = queue.current.shift();
-          if (q) setPuzzle(q);
-        }, 800);
+    async (solved: number) => {
+      const id = session.current;
+      setPuzzle(null);
+      setLoading(true);
+      setError('');
+      try {
+        const p = await queue.current.take(tierFor(solved));
+        if (id !== session.current) return;
+        if (!p) throw new Error(L('Keine Aufgaben erhalten', 'No puzzles received'));
+        setPuzzle(p);
+        // Ein Vorladefehler wird beim nächsten benötigten Puzzle erneut versucht.
+        queue.current.refill(tierFor(solved)).catch(() => {});
+      } catch (e: any) {
+        if (id === session.current) setError(e.message);
+      } finally {
+        if (id === session.current) setLoading(false);
       }
     },
-    [topUp],
+    [],
   );
 
   function start() {
+    session.current++;
     setResults([]);
     savedRef.current = false;
     endAt.current = performance.now() + seconds * 1000;
@@ -91,31 +102,43 @@ export function Rush({ seconds }: { seconds: number }) {
     next(0);
   }
 
+  const finish = useCallback(() => {
+    session.current++;
+    queue.current.reset();
+    setPhase('done');
+  }, []);
+
   // Countdown
   useEffect(() => {
     if (phase !== 'running') return;
     const id = window.setInterval(() => {
       const l = endAt.current - performance.now();
       setLeft(Math.max(0, l));
-      if (l <= 0) setPhase('done');
+      if (l <= 0) finish();
     }, 100);
     return () => window.clearInterval(id);
-  }, [phase]);
+  }, [phase, finish]);
 
   const onOutcome = useCallback(
     (o: PuzzleOutcome) => {
       if (!puzzle || phase !== 'running') return;
+      if (performance.now() >= endAt.current) {
+        finish();
+        return;
+      }
       const ok = o.solved && !o.assisted;
-      setResults((rs) => {
-        const nextRs = [...rs, { p: puzzle, ok }];
-        const solved = nextRs.filter((r) => r.ok).length;
-        if (nextRs.length - solved >= MAX_ERRORS) setTimeout(() => setPhase('done'), 450);
-        else setTimeout(() => next(solved), ok ? 120 : 450);
-        return nextRs;
-      });
+      const nextRs = [...results, { p: puzzle, ok }];
+      const solved = nextRs.filter((r) => r.ok).length;
+      const id = session.current;
+      setResults(nextRs);
+      setTimeout(() => {
+        if (id !== session.current) return;
+        if (nextRs.length - solved >= MAX_ERRORS) finish();
+        else next(solved);
+      }, ok ? 120 : 450);
       if (!ok) playSound('check');
     },
-    [puzzle, phase, next],
+    [puzzle, phase, results, next, finish],
   );
 
   const pz = usePuzzle(puzzle, onOutcome, { fast: true });
@@ -209,8 +232,8 @@ export function Rush({ seconds }: { seconds: number }) {
                     </div>
                     {error && <p className="err-text" style={{ padding: '0 18px' }}>{error}</p>}
                     <div className="over-btns">
-                      <button className="btn primary block xl" onClick={start} disabled={phase !== 'ready'}>
-                        {phase === 'ready' ? L('Los!', 'Go!') : L('Lade Aufgaben …', 'Loading puzzles …')}
+                      <button className="btn primary block xl" onClick={error ? prepare : start} disabled={loading || (phase !== 'ready' && !error)}>
+                        {error ? L('Erneut versuchen', 'Try again') : phase === 'ready' ? L('Los!', 'Go!') : L('Lade Aufgaben …', 'Loading puzzles …')}
                       </button>
                     </div>
                   </>
@@ -239,6 +262,16 @@ export function Rush({ seconds }: { seconds: number }) {
           <h1>Puzzle Rush</h1>
         </header>
         <div className="panel-top">
+          {phase === 'running' && !puzzle && (
+            <div className="status-box" role="status">
+              {error ? (
+                <div>
+                  <p className="err-text">{error}</p>
+                  <button className="btn small" onClick={() => next(score)} disabled={loading}>{L('Erneut versuchen', 'Try again')}</button>
+                </div>
+              ) : <span>{L('Lade Aufgaben …', 'Loading puzzles …')}</span>}
+            </div>
+          )}
           <div className={`rush-timer ${left < 10_000 && phase === 'running' ? 'low' : ''}`}>
             <Timer size={26} />
             {mm}:{String(ss).padStart(2, '0')}
