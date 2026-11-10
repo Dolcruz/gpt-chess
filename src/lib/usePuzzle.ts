@@ -77,6 +77,7 @@ export function usePuzzle(p: PuzzleData | null, onOutcome: (o: PuzzleOutcome) =>
     setBusy(false);
     setFailed(false);
     sync(p.lastMove ?? undefined);
+    return () => { token.current++; };
   }, [p, sync]);
 
   const play = (uci: string) => {
@@ -158,12 +159,21 @@ export function usePuzzle(p: PuzzleData | null, onOutcome: (o: PuzzleOutcome) =>
   }, [p, status, shapes]);
 
   const showSolution = useCallback(async () => {
-    if (!p) return;
+    if (!p || status === 'solved' || status === 'shown') return;
+    const t = ++token.current;
+    // Playback owns the board from here; discard any unaccepted move still awaiting rollback.
+    const accepted = new Chess(p.fen);
+    for (const uci of p.solution.slice(0, step.current)) {
+      accepted.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    }
+    chess.current = accepted;
+    const previous = accepted.history({ verbose: true }).at(-1);
+    sync(previous ? [previous.from, previous.to] : p.lastMove ?? undefined);
     assisted.current = true;
     report(false);
-    const t = token.current;
     setStatus('shown');
     setShapes([]);
+    setBadge(undefined);
     setBusy(true);
     while (step.current < p.solution.length) {
       await sleep(550);
@@ -173,7 +183,7 @@ export function usePuzzle(p: PuzzleData | null, onOutcome: (o: PuzzleOutcome) =>
       step.current++;
     }
     setBusy(false);
-  }, [p, report]);
+  }, [p, report, status, sync]);
 
   const turnColor = fen.split(' ')[1] as 'w' | 'b';
   const canMove = !!p && !busy && status !== 'solved' && status !== 'shown' && turnColor === p.color;
